@@ -133,19 +133,17 @@ export default function MindMap({
       .force('link',
         d3.forceLink<D3Node, D3Edge>(newEdges)
           .id(d => d.id)
-          .distance(140)
-          .strength(0.8)
+          .distance(180)   // more space between connected nodes
+          .strength(0.6)   // slightly looser so clusters can breathe
       )
-      .force('charge', d3.forceManyBody<D3Node>().strength(-350).theta(0.9))
+      .force('charge', d3.forceManyBody<D3Node>().strength(-600).theta(0.9)) // stronger repulsion separates clusters
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide<D3Node>(d => getRadius(d.id, degreeMap) + 8))
-      // forceX/Y act as per-node gravity wells — unlike forceCenter (which only
-      // adjusts the group's centre of mass), these individually pull every node
-      // back toward the viewport centre, preventing low-degree nodes from
-      // drifting off screen. Strength 0.07 is gentle enough to leave space
-      // between clusters but strong enough to stop runaway drift.
-      .force('x', d3.forceX(width / 2).strength(0.07))
-      .force('y', d3.forceY(height / 2).strength(0.07))
+      .force('collide', d3.forceCollide<D3Node>(d => getRadius(d.id, degreeMap) + 14)) // wider collision buffer
+      // forceX/Y: gentle per-node gravity — keeps stray nodes from drifting
+      // off screen without squashing clusters together. 0.04 is light enough
+      // that the charge repulsion still dominates within the viewport.
+      .force('x', d3.forceX(width / 2).strength(0.04))
+      .force('y', d3.forceY(height / 2).strength(0.04))
       .alphaDecay(0.028);
 
     simRef.current = sim;
