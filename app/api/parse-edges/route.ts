@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
 function buildSystemPrompt(
   allNodes: unknown[],
   existingEdges: unknown[],
@@ -20,16 +18,17 @@ STRICT RULES:
 7. Avoid redundant pairs: if A→B of type X exists, do not create B→A of type X.
 8. Set origin to "ai-generated" for all edges.
 9. Generate edge IDs as "edge_" + zero-padded 3-digit number, continuing from the highest existing edge ID.
-10. Return ONLY raw JSON with no markdown fences, no explanation, no extra text.
+10. Return at most 30 edges total — prioritize the most educationally valuable relationships.
+11. Return ONLY raw JSON with no markdown fences, no explanation, no extra text.
 
 NODES:
-${JSON.stringify(allNodes, null, 2)}
+${JSON.stringify(allNodes)}
 
 EXISTING EDGES (do not recreate these):
-${JSON.stringify(existingEdges, null, 2)}
+${JSON.stringify(existingEdges)}
 
 FOCUS NODES (prioritize relationships involving these IDs):
-${JSON.stringify(focusNodeIds, null, 2)}
+${JSON.stringify(focusNodeIds)}
 
 OUTPUT FORMAT:
 {
@@ -53,6 +52,21 @@ function stripFences(text: string): string {
     .trim();
 }
 
+// Attempt to recover a truncated JSON array of edges
+function recoverTruncatedEdges(text: string): string {
+  const stripped = stripFences(text);
+  const lastComplete = stripped.lastIndexOf('},');
+  if (lastComplete === -1) {
+    // Try single edge
+    const singleEnd = stripped.lastIndexOf('}');
+    if (singleEnd === -1) return '{"newEdges":[]}';
+    return '{"newEdges":[' + stripped.slice(stripped.indexOf('{'), singleEnd + 1) + ']}';
+  }
+  const edgesStart = stripped.indexOf('[');
+  if (edgesStart === -1) return '{"newEdges":[]}';
+  return '{"newEdges":' + stripped.slice(edgesStart, lastComplete + 1) + ']}';
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -66,12 +80,25 @@ export async function POST(req: NextRequest) {
       (allNodes as Array<{ id: string }>).map(n => n.id)
     );
 
-    const systemPrompt = buildSystemPrompt(allNodes, existingEdges, focusNodeIds);
+    // Send only compact fields to save input tokens — label + domain enough for relationship reasoning
+    const compactNodes = (allNodes as Array<{ id: string; label: string; domain: string; definition?: string }>)
+      .map(n => ({ id: n.id, label: n.label, domain: n.domain }));
+
+    // Send only source/target/type for existing edges — no need for full edge objects
+    const compactExistingEdges = (existingEdges as Array<{ source: string; target: string; type: string }>)
+      .map(e => ({
+        source: typeof e.source === 'object' ? (e.source as { id: string }).id : e.source,
+        target: typeof e.target === 'object' ? (e.target as { id: string }).id : e.target,
+        type: e.type,
+      }));
+
+    const systemPrompt = buildSystemPrompt(compactNodes, compactExistingEdges, focusNodeIds);
 
     const callAI = async (extra = '') => {
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const response = await client.messages.create({
         model: 'claude-sonnet-4-6',
-        max_tokens: 2048,
+        max_tokens: 4096,
         messages: [{
           role: 'user',
           content: 'Extract relationships as specified.' + extra,
@@ -89,16 +116,23 @@ export async function POST(req: NextRequest) {
     try {
       parsed = JSON.parse(stripFences(rawText));
     } catch {
-      rawText = await callAI(
-        '\n\nYour previous response was not valid JSON. Return ONLY raw JSON with no markdown fences.'
-      );
+      // Try to recover truncated JSON first
       try {
-        parsed = JSON.parse(stripFences(rawText));
+        parsed = JSON.parse(recoverTruncatedEdges(rawText));
       } catch {
-        return NextResponse.json(
-          { error: 'AI returned invalid JSON after retry.' },
-          { status: 422 }
+        rawText = await callAI(
+          '\n\nReturn ONLY raw JSON with no markdown fences. Max 30 edges.'
         );
+        try {
+          parsed = JSON.parse(stripFences(rawText));
+        } catch {
+          try {
+            parsed = JSON.parse(recoverTruncatedEdges(rawText));
+          } catch {
+            console.error('parse-edges: failed to parse. Raw:', rawText.slice(0, 500));
+            return NextResponse.json({ newEdges: [] }); // Graceful: return empty not 422
+          }
+        }
       }
     }
 

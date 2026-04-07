@@ -7,7 +7,6 @@ import { saveGraph, loadGraph, exportGraphJSON, importGraphJSON } from '@/lib/st
 import InputPanel from '@/components/InputPanel';
 import NodePanel from '@/components/NodePanel';
 import SearchBar from '@/components/SearchBar';
-import Legend from '@/components/Legend';
 import FlashcardMode from '@/components/FlashcardMode';
 import QuizMode from '@/components/QuizMode';
 import { getRelatedEdges } from '@/lib/graphUtils';
@@ -107,6 +106,8 @@ export default function Home() {
 
   const handleNodeClick = useCallback((nodeId: string) => {
     setSelectedNodeId(prev => (prev === nodeId ? null : nodeId));
+    setCenterOnNodeId(nodeId);
+    setTimeout(() => setCenterOnNodeId(null), 800);
   }, []);
 
   const handleNodeJump = useCallback((nodeId: string) => {
@@ -248,9 +249,9 @@ export default function Home() {
               selectedNodeId={selectedNodeId}
               highlightedNodeIds={highlightedNodeIds}
               onNodeClick={handleNodeClick}
+              onBackgroundClick={() => setSelectedNodeId(null)}
               centerOnNodeId={centerOnNodeId}
             />
-            <Legend />
             <NodePanel
               node={selectedNode}
               relatedEdges={relatedEdges}
