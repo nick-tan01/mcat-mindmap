@@ -59,8 +59,10 @@ export default function MindMap({
   const nodesRef = useRef<D3Node[]>([]);
   const edgesRef = useRef<D3Edge[]>([]);
 
-  // Track mouse position for the background-click gesture (handled in React, not D3)
-  const bgGestureRef = useRef({ x: 0, y: 0, moved: false });
+  // Track mouse gesture for background-click deselect (handled in React, not D3).
+  // startedOnNode: if mousedown landed on a node, the whole gesture belongs to
+  // that node — even if the mouse ends up over empty space after a drag.
+  const bgGestureRef = useRef({ x: 0, y: 0, moved: false, startedOnNode: false });
 
   // Design 3 — degree-based radius
   const buildDegreeMap = useCallback((nodes: GraphNode[], edges: GraphEdge[]) => {
@@ -434,24 +436,30 @@ export default function MindMap({
   }, [centerOnNodeId, selectedNodeId]);
 
   // ── Background deselect — handled entirely in React, independent of D3 ──────
-  // onMouseDown: record start position and reset moved flag.
-  // onMouseMove: mark as moved if the pointer travels more than 5px (pan gesture).
-  // onMouseUp:   if not moved and the target isn't inside a .node group, deselect.
-  // React's synthetic events run before D3's window-level listeners, so
-  // event.target correctly reflects the element under the cursor for all nodes.
+  // startedOnNode covers both clicks on nodes AND node drags that end over
+  // empty space — D3 captures mousemove during a drag so React's onMouseMove
+  // never fires, meaning `moved` would stay false and incorrectly trigger
+  // deselect when releasing a dragged node over the background.
   const handleSvgMouseDown = (e: React.MouseEvent) => {
-    bgGestureRef.current = { x: e.clientX, y: e.clientY, moved: false };
+    bgGestureRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      moved: false,
+      startedOnNode: !!(e.target as Element).closest?.('.node'),
+    };
   };
 
   const handleSvgMouseMove = (e: React.MouseEvent) => {
     const { x, y } = bgGestureRef.current;
-    const dist = Math.sqrt((e.clientX - x) ** 2 + (e.clientY - y) ** 2);
-    if (dist > 5) bgGestureRef.current.moved = true;
+    if (Math.sqrt((e.clientX - x) ** 2 + (e.clientY - y) ** 2) > 5) {
+      bgGestureRef.current.moved = true;
+    }
   };
 
-  const handleSvgMouseUp = (e: React.MouseEvent) => {
-    if (bgGestureRef.current.moved) return;           // was a pan, not a click
-    if ((e.target as Element).closest?.('.node')) return; // clicked a node
+  const handleSvgMouseUp = () => {
+    const { moved, startedOnNode } = bgGestureRef.current;
+    if (startedOnNode) return; // click or drag that began on a node — not a background click
+    if (moved) return;         // pan gesture — not a click
     onBackgroundClick();
   };
 
