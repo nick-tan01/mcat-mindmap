@@ -181,8 +181,8 @@ export default function MindMap({
       .force('charge', d3.forceManyBody<D3Node>().strength(-500).theta(0.9))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collide', d3.forceCollide<D3Node>(d => getRadius(d.id, degreeMap) + 12))
-      .force('x', d3.forceX<D3Node>(d => nodeTargetX.get(d.id) ?? width / 2).strength(0.12))
-      .force('y', d3.forceY<D3Node>(d => nodeTargetY.get(d.id) ?? height / 2).strength(0.12))
+      .force('x', d3.forceX<D3Node>(d => nodeTargetX.get(d.id) ?? width / 2).strength(0.04))
+      .force('y', d3.forceY<D3Node>(d => nodeTargetY.get(d.id) ?? height / 2).strength(0.04))
       .alphaDecay(0.028);
 
     simRef.current = sim;
@@ -304,9 +304,18 @@ export default function MindMap({
       })
       .on('end', function(event, d) {
         if (!event.active) sim.alphaTarget(0);
-        if (!d.__dragged) onNodeClick(d.id); // Bug 2 — click only on non-drag
-        d.fx = null;
-        d.fy = null;
+        if (!d.__dragged) {
+          // Click (no drag): release the node back to the simulation forces
+          onNodeClick(d.id);
+          d.fx = null;
+          d.fy = null;
+        } else {
+          // Real drag: pin the node at the dropped position for this session.
+          // On page refresh nodesRef is cleared, so the layout resets to the
+          // simulation's computed equilibrium — manual arrangement is not saved.
+          d.fx = d.x;
+          d.fy = d.y;
+        }
       });
 
     nodeSel.call(drag as d3.DragBehavior<SVGGElement, D3Node, D3Node | d3.SubjectPosition>);
