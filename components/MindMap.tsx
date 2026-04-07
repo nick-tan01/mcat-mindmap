@@ -131,9 +131,9 @@ export default function MindMap({
     edgesRef.current = newEdges;
 
     // ── Domain clustering — arrange domain groups around a ring ──────────────
-    const domains = [...new Set(graph.nodes.map(n => n.domain))];
-    const domainAngle = new Map(
-      domains.map((d, i) => [d, (i / domains.length) * 2 * Math.PI - Math.PI / 2])
+    const domains = Array.from(new Set(graph.nodes.map(n => n.domain)));
+    const domainAngle = new Map<string, number>(
+      domains.map((d, i) => [d as string, (i / domains.length) * 2 * Math.PI - Math.PI / 2])
     );
     const clusterR = Math.min(width, height) * 0.30;
 
@@ -149,7 +149,7 @@ export default function MindMap({
 
     graph.nodes.forEach(n => {
       const domainWeights = new Map<string, number>();
-      domainWeights.set(n.domain, 2); // anchor to own domain
+      domainWeights.set(n.domain as string, 2); // anchor to own domain
 
       graph.edges.forEach(e => {
         const src = typeof e.source === 'string' ? e.source : (e.source as D3Node).id;
@@ -158,7 +158,7 @@ export default function MindMap({
         if (!neighbourId) return;
         const neighbour = graph.nodes.find(nn => nn.id === neighbourId);
         if (!neighbour) return;
-        domainWeights.set(neighbour.domain, (domainWeights.get(neighbour.domain) ?? 0) + 1);
+        domainWeights.set(neighbour.domain as string, (domainWeights.get(neighbour.domain as string) ?? 0) + 1);
       });
 
       let tx = 0, ty = 0, total = 0;
