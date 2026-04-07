@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { GraphNode, SM2State } from '@/lib/types';
+import { useState, useMemo, useEffect } from 'react';
+import { GraphNode, MCATDomain, SM2State } from '@/lib/types';
 import { DOMAIN_COLORS } from '@/lib/colors';
 import { updateSM2, isDueToday } from '@/lib/sm2';
 
@@ -19,38 +19,76 @@ interface QuizQuestion {
   correctIndex: number;
 }
 
-function buildQuestions(nodes: GraphNode[]): QuizQuestion[] {
-  // Sort: overdue first, then by interval ascending
-  const sorted = [...nodes].sort((a, b) => {
-    const aDue = isDueToday(a.quiz);
-    const bDue = isDueToday(b.quiz);
-    if (aDue && !bDue) return -1;
-    if (!aDue && bDue) return 1;
-    return a.quiz.interval - b.quiz.interval;
-  });
+function fisherYates<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
-  return sorted.map(node => {
-    // 3 distractors from same domain
-    const sameDomain = nodes.filter(n => n.id !== node.id && n.domain === node.domain);
-    const otherDomain = nodes.filter(n => n.id !== node.id && n.domain !== node.domain);
-    const pool = [...sameDomain, ...otherDomain];
+function buildQuestions(sourceNodes: GraphNode[], allNodes: GraphNode[], randomize: boolean): QuizQuestion[] {
+  let ordered: GraphNode[];
 
-    const shuffled = pool.sort(() => Math.random() - 0.5).slice(0, 3);
-    const options = [...shuffled.map(n => n.label), node.label];
-    const shuffledOptions = options.sort(() => Math.random() - 0.5);
-    const correctIndex = shuffledOptions.indexOf(node.label);
+  if (randomize) {
+    ordered = fisherYates(sourceNodes);
+  } else {
+    // Default: overdue first, then by interval ascending
+    ordered = [...sourceNodes].sort((a, b) => {
+      const aDue = isDueToday(a.quiz);
+      const bDue = isDueToday(b.quiz);
+      if (aDue && !bDue) return -1;
+      if (!aDue && bDue) return 1;
+      return a.quiz.interval - b.quiz.interval;
+    });
+  }
 
-    return { node, options: shuffledOptions, correctIndex };
+  return ordered.map(node => {
+    // 3 distractors — prefer same domain, fall back to other domains
+    const sameDomain = allNodes.filter(n => n.id !== node.id && n.domain === node.domain);
+    const otherDomain = allNodes.filter(n => n.id !== node.id && n.domain !== node.domain);
+    const pool = fisherYates([...sameDomain, ...otherDomain]).slice(0, 3);
+
+    const options = fisherYates([...pool.map(n => n.label), node.label]);
+    const correctIndex = options.indexOf(node.label);
+
+    return { node, options, correctIndex };
   });
 }
 
 export default function QuizMode({ nodes, onClose, onMasteryUpdate }: QuizModeProps) {
-  const questions = useMemo(() => buildQuestions(nodes), [nodes]);
+  const [isShuffled, setIsShuffled] = useState(false);
+  const [shuffleKey, setShuffleKey] = useState(0);
+  const [domainFilter, setDomainFilter] = useState<MCATDomain | null>(null);
+
+  // All domains that actually have nodes
+  const availableDomains = useMemo(
+    () => Array.from(new Set(nodes.map(n => n.domain))) as MCATDomain[],
+    [nodes]
+  );
+
+  const questions = useMemo(() => {
+    const source = domainFilter ? nodes.filter(n => n.domain === domainFilter) : nodes;
+    void shuffleKey; // included in deps to force re-build on re-shuffle
+    return buildQuestions(source, nodes, isShuffled);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, domainFilter, isShuffled, shuffleKey]);
+
   const [qIndex, setQIndex] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
   const [quality, setQuality] = useState<Quality | null>(null);
   const [correct, setCorrect] = useState(0);
   const [done, setDone] = useState(false);
+
+  // Reset quiz state whenever question set changes
+  useEffect(() => {
+    setQIndex(0);
+    setSelected(null);
+    setQuality(null);
+    setCorrect(0);
+    setDone(false);
+  }, [questions]);
 
   const q = questions[qIndex];
 
@@ -59,9 +97,9 @@ export default function QuizMode({ nodes, onClose, onMasteryUpdate }: QuizModePr
     setSelected(idx);
   };
 
-  const handleQuality = (q: Quality) => {
-    setQuality(q);
-    const { newState, newMastery } = updateSM2(questions[qIndex].node.quiz, q);
+  const handleQuality = (qual: Quality) => {
+    setQuality(qual);
+    const { newState, newMastery } = updateSM2(questions[qIndex].node.quiz, qual);
     onMasteryUpdate(questions[qIndex].node.id, newState, newMastery);
     if (selected === questions[qIndex].correctIndex) setCorrect(c => c + 1);
   };
@@ -73,6 +111,15 @@ export default function QuizMode({ nodes, onClose, onMasteryUpdate }: QuizModePr
       setQIndex(i => i + 1);
       setSelected(null);
       setQuality(null);
+    }
+  };
+
+  const handleShuffleClick = () => {
+    if (!isShuffled) {
+      setIsShuffled(true);
+      setShuffleKey(k => k + 1);
+    } else {
+      setShuffleKey(k => k + 1); // re-shuffle
     }
   };
 
@@ -130,31 +177,92 @@ export default function QuizMode({ nodes, onClose, onMasteryUpdate }: QuizModePr
     >
       {/* Top bar */}
       <div
-        className="w-full flex items-center justify-between px-6 py-3"
+        className="w-full flex flex-col gap-2 px-6 py-3"
         style={{ borderBottom: '1px solid #2a2a38' }}
       >
-        <div className="text-sm" style={{ color: '#8888a8' }}>
-          Question {qIndex + 1} / {questions.length}
-        </div>
-        <div
-          className="h-1.5 flex-1 mx-6 rounded-full"
-          style={{ background: '#2a2a38' }}
-        >
+        {/* Row 1: progress + exit */}
+        <div className="flex items-center gap-4">
+          <div className="text-sm shrink-0" style={{ color: '#8888a8' }}>
+            Question {qIndex + 1} / {questions.length}
+          </div>
           <div
-            className="h-1.5 rounded-full transition-all"
-            style={{
-              width: `${((qIndex + 1) / questions.length) * 100}%`,
-              background: '#6366f1',
-            }}
-          />
+            className="h-1.5 flex-1 rounded-full"
+            style={{ background: '#2a2a38' }}
+          >
+            <div
+              className="h-1.5 rounded-full transition-all"
+              style={{
+                width: `${((qIndex + 1) / questions.length) * 100}%`,
+                background: '#6366f1',
+              }}
+            />
+          </div>
+          <button
+            onClick={onClose}
+            className="text-sm hover:opacity-80 shrink-0"
+            style={{ color: '#8888a8' }}
+          >
+            ✕ Exit
+          </button>
         </div>
-        <button
-          onClick={onClose}
-          className="text-sm hover:opacity-80"
-          style={{ color: '#8888a8' }}
-        >
-          ✕ Exit
-        </button>
+
+        {/* Row 2: domain chips + shuffle */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setDomainFilter(null)}
+            className="px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors"
+            style={{
+              background: domainFilter === null ? '#e8e8f025' : 'transparent',
+              color: domainFilter === null ? '#e8e8f0' : '#8888a8',
+              border: `1px solid ${domainFilter === null ? '#e8e8f050' : '#2a2a38'}`,
+            }}
+          >
+            All Domains
+          </button>
+          {availableDomains.map(domain => {
+            const color = DOMAIN_COLORS[domain];
+            const active = domainFilter === domain;
+            return (
+              <button
+                key={domain}
+                onClick={() => setDomainFilter(active ? null : domain)}
+                className="px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors"
+                style={{
+                  background: active ? color + '30' : 'transparent',
+                  color: active ? color : '#8888a8',
+                  border: `1px solid ${active ? color + '60' : '#2a2a38'}`,
+                }}
+              >
+                {domain}
+              </button>
+            );
+          })}
+
+          {/* Divider */}
+          <div style={{ width: 1, height: 16, background: '#2a2a38', margin: '0 4px' }} />
+
+          {/* Shuffle */}
+          <button
+            onClick={handleShuffleClick}
+            className="px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors"
+            style={{
+              background: isShuffled ? '#6366f130' : 'transparent',
+              color: isShuffled ? '#6366f1' : '#8888a8',
+              border: `1px solid ${isShuffled ? '#6366f150' : '#2a2a38'}`,
+            }}
+          >
+            {isShuffled ? '🔀 Re-shuffle' : '🔀 Shuffle'}
+          </button>
+          {isShuffled && (
+            <button
+              onClick={() => setIsShuffled(false)}
+              className="px-2.5 py-0.5 rounded-full text-xs transition-colors"
+              style={{ color: '#8888a8', border: '1px solid #2a2a38' }}
+            >
+              Reset Order
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Question */}
