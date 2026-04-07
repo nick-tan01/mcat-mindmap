@@ -129,15 +129,46 @@ export default function MindMap({
     edgesRef.current = newEdges;
 
     // ── Domain clustering — arrange domain groups around a ring ──────────────
-    // Each unique domain gets a fixed angle on a circle. forceX/Y then pull
-    // every node toward its domain's anchor point, grouping same-domain nodes
-    // together and pushing different domains apart. This dramatically reduces
-    // edge crossings compared to a fully random layout.
     const domains = [...new Set(graph.nodes.map(n => n.domain))];
     const domainAngle = new Map(
       domains.map((d, i) => [d, (i / domains.length) * 2 * Math.PI - Math.PI / 2])
     );
     const clusterR = Math.min(width, height) * 0.30;
+
+    // ── Per-node target: weighted centroid of neighbour domain anchors ────────
+    // A node whose edges all stay within one domain targets the centre of that
+    // domain's sector (sits deep in the cluster).
+    // A node that bridges two domains targets the boundary between them.
+    // A node that bridges many domains migrates toward the overall centre.
+    // Own domain is double-weighted so nodes stay grounded in their cluster
+    // unless cross-domain connections are dominant.
+    const nodeTargetX = new Map<string, number>();
+    const nodeTargetY = new Map<string, number>();
+
+    graph.nodes.forEach(n => {
+      const domainWeights = new Map<string, number>();
+      domainWeights.set(n.domain, 2); // anchor to own domain
+
+      graph.edges.forEach(e => {
+        const src = typeof e.source === 'string' ? e.source : (e.source as D3Node).id;
+        const tgt = typeof e.target === 'string' ? e.target : (e.target as D3Node).id;
+        const neighbourId = src === n.id ? tgt : tgt === n.id ? src : null;
+        if (!neighbourId) return;
+        const neighbour = graph.nodes.find(nn => nn.id === neighbourId);
+        if (!neighbour) return;
+        domainWeights.set(neighbour.domain, (domainWeights.get(neighbour.domain) ?? 0) + 1);
+      });
+
+      let tx = 0, ty = 0, total = 0;
+      domainWeights.forEach((w, domain) => {
+        const angle = domainAngle.get(domain) ?? 0;
+        tx += (width / 2 + Math.cos(angle) * clusterR) * w;
+        ty += (height / 2 + Math.sin(angle) * clusterR) * w;
+        total += w;
+      });
+      nodeTargetX.set(n.id, tx / total);
+      nodeTargetY.set(n.id, ty / total);
+    });
 
     // ── Simulation ────────────────────────────────────────────────────────────
     const sim = d3.forceSimulation<D3Node>(newNodes)
@@ -150,17 +181,8 @@ export default function MindMap({
       .force('charge', d3.forceManyBody<D3Node>().strength(-500).theta(0.9))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collide', d3.forceCollide<D3Node>(d => getRadius(d.id, degreeMap) + 12))
-      // Pull each node toward its domain's position on the ring.
-      // Strength 0.12 is strong enough to form visible clusters while still
-      // letting the link force keep connected nodes close to each other.
-      .force('x', d3.forceX<D3Node>(d => {
-        const angle = domainAngle.get(d.domain) ?? 0;
-        return width / 2 + Math.cos(angle) * clusterR;
-      }).strength(0.12))
-      .force('y', d3.forceY<D3Node>(d => {
-        const angle = domainAngle.get(d.domain) ?? 0;
-        return height / 2 + Math.sin(angle) * clusterR;
-      }).strength(0.12))
+      .force('x', d3.forceX<D3Node>(d => nodeTargetX.get(d.id) ?? width / 2).strength(0.12))
+      .force('y', d3.forceY<D3Node>(d => nodeTargetY.get(d.id) ?? height / 2).strength(0.12))
       .alphaDecay(0.028);
 
     simRef.current = sim;
