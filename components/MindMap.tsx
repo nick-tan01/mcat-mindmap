@@ -128,22 +128,39 @@ export default function MindMap({
     nodesRef.current = newNodes;
     edgesRef.current = newEdges;
 
+    // ── Domain clustering — arrange domain groups around a ring ──────────────
+    // Each unique domain gets a fixed angle on a circle. forceX/Y then pull
+    // every node toward its domain's anchor point, grouping same-domain nodes
+    // together and pushing different domains apart. This dramatically reduces
+    // edge crossings compared to a fully random layout.
+    const domains = [...new Set(graph.nodes.map(n => n.domain))];
+    const domainAngle = new Map(
+      domains.map((d, i) => [d, (i / domains.length) * 2 * Math.PI - Math.PI / 2])
+    );
+    const clusterR = Math.min(width, height) * 0.30;
+
     // ── Simulation ────────────────────────────────────────────────────────────
     const sim = d3.forceSimulation<D3Node>(newNodes)
       .force('link',
         d3.forceLink<D3Node, D3Edge>(newEdges)
           .id(d => d.id)
-          .distance(180)   // more space between connected nodes
-          .strength(0.6)   // slightly looser so clusters can breathe
+          .distance(160)
+          .strength(0.5)
       )
-      .force('charge', d3.forceManyBody<D3Node>().strength(-600).theta(0.9)) // stronger repulsion separates clusters
+      .force('charge', d3.forceManyBody<D3Node>().strength(-500).theta(0.9))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide<D3Node>(d => getRadius(d.id, degreeMap) + 14)) // wider collision buffer
-      // forceX/Y: gentle per-node gravity — keeps stray nodes from drifting
-      // off screen without squashing clusters together. 0.04 is light enough
-      // that the charge repulsion still dominates within the viewport.
-      .force('x', d3.forceX(width / 2).strength(0.04))
-      .force('y', d3.forceY(height / 2).strength(0.04))
+      .force('collide', d3.forceCollide<D3Node>(d => getRadius(d.id, degreeMap) + 12))
+      // Pull each node toward its domain's position on the ring.
+      // Strength 0.12 is strong enough to form visible clusters while still
+      // letting the link force keep connected nodes close to each other.
+      .force('x', d3.forceX<D3Node>(d => {
+        const angle = domainAngle.get(d.domain) ?? 0;
+        return width / 2 + Math.cos(angle) * clusterR;
+      }).strength(0.12))
+      .force('y', d3.forceY<D3Node>(d => {
+        const angle = domainAngle.get(d.domain) ?? 0;
+        return height / 2 + Math.sin(angle) * clusterR;
+      }).strength(0.12))
       .alphaDecay(0.028);
 
     simRef.current = sim;
